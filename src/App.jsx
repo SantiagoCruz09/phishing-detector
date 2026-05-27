@@ -1,4 +1,20 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from '@supabase/supabase-js';
+
+// ── Supabase ──────────────────────────────────────────────────────────────────
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_KEY
+);
+
+// ── constantes ────────────────────────────────────────────────────────────────
+const API_URL      = import.meta.env.VITE_API_URL + "/analyze";
+const SESSION_KEY  = "phishguard_session";
+const UCEVA_DOMAIN = "@uceva.edu.co";
+
+const getSession   = ()      => localStorage.getItem(SESSION_KEY);
+const saveSession  = (email) => localStorage.setItem(SESSION_KEY, email);
+const clearSession = ()      => localStorage.removeItem(SESSION_KEY);
 
 // ── icons ─────────────────────────────────────────────────────────────────────
 const ShieldIcon = ({ color = "currentColor", size = 24 }) => (
@@ -63,12 +79,6 @@ const WifiOffIcon = ({ size = 20 }) => (
   </svg>
 );
 
-// ── constantes ────────────────────────────────────────────────────────────────
-const API_URL        = "http://localhost:8000/analyze";
-const STORAGE_KEY    = "phishguard_users";
-const SESSION_KEY    = "phishguard_session";
-const UCEVA_DOMAIN   = "@uceva.edu.co";
-
 const PLACEHOLDERS = [
   "Pega aquí un mensaje sospechoso, correo o URL...",
   "Ej: http://paypa1-secure-login.com/verify",
@@ -84,14 +94,6 @@ const SCAN_STEPS = [
   { label: "Clasificación",  threshold: 92 },
 ];
 
-// ── helpers de usuarios (localStorage) ───────────────────────────────────────
-const getUsers    = ()         => JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-const saveUsers   = (users)    => localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
-const getSession  = ()         => localStorage.getItem(SESSION_KEY);
-const saveSession = (email)    => localStorage.setItem(SESSION_KEY, email);
-const clearSession= ()         => localStorage.removeItem(SESSION_KEY);
-
-// ── CSS base ──────────────────────────────────────────────────────────────────
 const BASE_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -117,10 +119,10 @@ const BASE_STYLES = `
 `;
 
 // ══════════════════════════════════════════════════════════════════════════════
-// AUTH SCREEN (Login + Registro)
+// AUTH SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
 function AuthScreen({ onLogin }) {
-  const [mode, setMode]         = useState("login"); // "login" | "register"
+  const [mode, setMode]         = useState("login");
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm]   = useState("");
@@ -128,37 +130,55 @@ function AuthScreen({ onLogin }) {
   const [showPass, setShowPass] = useState(false);
   const [error, setError]       = useState("");
   const [success, setSuccess]   = useState("");
+  const [loading, setLoading]   = useState(false);
   const [visible, setVisible]   = useState(false);
 
   useEffect(() => { setTimeout(() => setVisible(true), 80); }, []);
 
   const reset = () => { setError(""); setSuccess(""); };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     reset();
     if (!email || !password) return setError("Completa todos los campos.");
-    const users = getUsers();
-    const user  = users.find(u => u.email === email.toLowerCase().trim());
-    if (!user)            return setError("Correo no registrado.");
-    if (user.password !== password) return setError("Contraseña incorrecta.");
-    saveSession(user.email);
-    onLogin(user);
+    setLoading(true);
+    try {
+      const { data, error: err } = await supabase
+        .from('usuarios')
+        .select('*')
+        .eq('email', email.toLowerCase().trim())
+        .eq('password', password)
+        .single();
+      if (err || !data) return setError("Correo o contraseña incorrectos.");
+      saveSession(data.email);
+      onLogin(data);
+    } catch {
+      setError("Error de conexión. Intenta de nuevo.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleRegister = () => {
+  const handleRegister = async () => {
     reset();
     const em = email.toLowerCase().trim();
     if (!nombre || !em || !password || !confirm) return setError("Completa todos los campos.");
     if (!em.endsWith(UCEVA_DOMAIN))              return setError(`Solo se permiten correos ${UCEVA_DOMAIN}`);
     if (password.length < 6)                     return setError("La contraseña debe tener mínimo 6 caracteres.");
     if (password !== confirm)                    return setError("Las contraseñas no coinciden.");
-    const users = getUsers();
-    if (users.find(u => u.email === em))         return setError("Este correo ya está registrado.");
-    users.push({ email: em, password, nombre: nombre.trim() });
-    saveUsers(users);
-    setSuccess("¡Cuenta creada! Ahora inicia sesión.");
-    setMode("login");
-    setPassword(""); setConfirm(""); setNombre("");
+    setLoading(true);
+    try {
+      const { error: err } = await supabase
+        .from('usuarios')
+        .insert([{ email: em, password, nombre: nombre.trim() }]);
+      if (err) return setError("Este correo ya está registrado.");
+      setSuccess("¡Cuenta creada! Ahora inicia sesión.");
+      setMode("login");
+      setPassword(""); setConfirm(""); setNombre("");
+    } catch {
+      setError("Error de conexión. Intenta de nuevo.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -167,157 +187,79 @@ function AuthScreen({ onLogin }) {
         ${BASE_STYLES}
         @keyframes fadeUp { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:none} }
         @keyframes pulse-ring { 0%{transform:scale(1);opacity:.6} 100%{transform:scale(1.5);opacity:0} }
-        .auth-wrap {
-          position:relative; z-index:1; min-height:100vh;
-          display:flex; flex-direction:column; align-items:center; justify-content:center;
-          padding:40px 20px;
-          opacity:0; transition:opacity .4s ease;
-        }
+        .auth-wrap { position:relative; z-index:1; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px 20px; opacity:0; transition:opacity .4s ease; }
         .auth-wrap.visible { opacity:1; }
         .auth-logo-ring { position:relative; width:72px; height:72px; margin:0 auto 20px; }
-        .auth-logo-ring::before {
-          content:''; position:absolute; inset:-6px; border-radius:50%;
-          border:2px solid rgba(0,200,255,0.4); animation:pulse-ring 2s ease-out infinite;
-        }
-        .auth-logo-circle {
-          width:72px; height:72px; border-radius:50%;
-          background:rgba(0,200,255,0.1); border:2px solid rgba(0,200,255,0.35);
-          display:flex; align-items:center; justify-content:center;
-        }
-        .auth-card {
-          background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
-          padding:32px 28px; width:100%; max-width:420px;
-          animation:fadeUp .4s ease both .1s;
-        }
+        .auth-logo-ring::before { content:''; position:absolute; inset:-6px; border-radius:50%; border:2px solid rgba(0,200,255,0.4); animation:pulse-ring 2s ease-out infinite; }
+        .auth-logo-circle { width:72px; height:72px; border-radius:50%; background:rgba(0,200,255,0.1); border:2px solid rgba(0,200,255,0.35); display:flex; align-items:center; justify-content:center; }
+        .auth-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:32px 28px; width:100%; max-width:420px; animation:fadeUp .4s ease both .1s; }
         .auth-title { font-size:22px; font-weight:800; text-align:center; margin-bottom:6px; }
         .auth-subtitle { font-size:13px; color:var(--text-muted); text-align:center; margin-bottom:24px; }
         .auth-subtitle span { color:var(--accent); }
         .auth-tabs { display:flex; gap:4px; background:var(--surface2); border-radius:var(--radius-sm); padding:4px; margin-bottom:22px; }
-        .auth-tab {
-          flex:1; padding:8px; border:none; border-radius:6px;
-          background:none; color:var(--text-muted); font-family:var(--font-ui);
-          font-size:13px; font-weight:700; cursor:pointer; transition:all .2s;
-        }
+        .auth-tab { flex:1; padding:8px; border:none; border-radius:6px; background:none; color:var(--text-muted); font-family:var(--font-ui); font-size:13px; font-weight:700; cursor:pointer; transition:all .2s; }
         .auth-tab.active { background:var(--surface); color:var(--text); }
         .field { margin-bottom:14px; }
         .field label { display:block; font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
         .field-wrap { position:relative; }
-        .field input {
-          width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-sm);
-          color:var(--text); font-family:var(--font-mono); font-size:13px; padding:11px 14px;
-          outline:none; transition:border-color .2s;
-        }
+        .field input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-family:var(--font-mono); font-size:13px; padding:11px 14px; outline:none; transition:border-color .2s; }
         .field input:focus { border-color:rgba(0,200,255,0.4); }
         .field input.error-input { border-color:rgba(255,23,68,0.5); }
-        .pass-toggle {
-          position:absolute; right:12px; top:50%; transform:translateY(-50%);
-          background:none; border:none; color:var(--text-muted); cursor:pointer;
-          display:flex; align-items:center; padding:0;
-        }
+        .pass-toggle { position:absolute; right:12px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; padding:0; }
         .pass-toggle:hover { color:var(--text); }
-        .auth-hint {
-          font-family:var(--font-mono); font-size:10px; color:var(--text-muted);
-          margin-top:5px;
-        }
+        .auth-hint { font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin-top:5px; }
         .auth-hint.accent { color:var(--accent); }
-        .btn-auth {
-          width:100%; padding:12px; background:var(--accent); color:#080c14;
-          font-family:var(--font-ui); font-size:15px; font-weight:700; border:none;
-          border-radius:var(--radius-sm); cursor:pointer; transition:opacity .2s, transform .2s;
-          margin-top:6px;
-        }
-        .btn-auth:hover { opacity:.9; transform:translateY(-1px); }
-        .auth-error {
-          background:rgba(255,23,68,0.08); border:1px solid rgba(255,23,68,.3);
-          border-radius:var(--radius-sm); padding:10px 14px;
-          font-size:13px; color:#ff1744; margin-bottom:14px;
-        }
-        .auth-success {
-          background:rgba(0,230,118,0.08); border:1px solid rgba(0,230,118,.3);
-          border-radius:var(--radius-sm); padding:10px 14px;
-          font-size:13px; color:#00e676; margin-bottom:14px;
-        }
+        .btn-auth { width:100%; padding:12px; background:var(--accent); color:#080c14; font-family:var(--font-ui); font-size:15px; font-weight:700; border:none; border-radius:var(--radius-sm); cursor:pointer; transition:opacity .2s,transform .2s; margin-top:6px; }
+        .btn-auth:hover:not(:disabled) { opacity:.9; transform:translateY(-1px); }
+        .btn-auth:disabled { opacity:.5; cursor:not-allowed; }
+        .auth-error { background:rgba(255,23,68,0.08); border:1px solid rgba(255,23,68,.3); border-radius:var(--radius-sm); padding:10px 14px; font-size:13px; color:#ff1744; margin-bottom:14px; }
+        .auth-success { background:rgba(0,230,118,0.08); border:1px solid rgba(0,230,118,.3); border-radius:var(--radius-sm); padding:10px 14px; font-size:13px; color:#00e676; margin-bottom:14px; }
         .auth-footer { margin-top:16px; font-size:11px; color:var(--text-muted); text-align:center; font-family:var(--font-mono); }
         .auth-footer span { color:var(--accent); }
       `}</style>
 
       <div className={`auth-wrap ${visible ? "visible" : ""}`}>
         <div className="auth-logo-ring">
-          <div className="auth-logo-circle">
-            <ShieldIcon color="#00c8ff" size={32} />
-          </div>
+          <div className="auth-logo-circle"><ShieldIcon color="#00c8ff" size={32} /></div>
         </div>
-
         <div className="auth-card">
           <div className="auth-title">PhishGuard</div>
           <div className="auth-subtitle">Acceso exclusivo para <span>@uceva.edu.co</span></div>
-
           <div className="auth-tabs">
             <button className={`auth-tab ${mode === "login" ? "active" : ""}`} onClick={() => { setMode("login"); reset(); }}>Iniciar sesión</button>
             <button className={`auth-tab ${mode === "register" ? "active" : ""}`} onClick={() => { setMode("register"); reset(); }}>Registrarse</button>
           </div>
-
           {error   && <div className="auth-error">⚠ {error}</div>}
           {success && <div className="auth-success">✓ {success}</div>}
-
           {mode === "register" && (
             <div className="field">
               <label>Nombre completo</label>
-              <input
-                type="text" placeholder="Tu nombre"
-                value={nombre} onChange={e => setNombre(e.target.value)}
-                className={error && !nombre ? "error-input" : ""}
-              />
+              <input type="text" placeholder="Tu nombre" value={nombre} onChange={e => setNombre(e.target.value)} />
             </div>
           )}
-
           <div className="field">
             <label>Correo institucional</label>
-            <input
-              type="email" placeholder={`usuario${UCEVA_DOMAIN}`}
-              value={email} onChange={e => { setEmail(e.target.value); reset(); }}
-              className={error && !email ? "error-input" : ""}
-            />
-            {mode === "register" && (
-              <div className="auth-hint accent">Solo se aceptan correos {UCEVA_DOMAIN}</div>
-            )}
+            <input type="email" placeholder={`usuario${UCEVA_DOMAIN}`} value={email} onChange={e => { setEmail(e.target.value); reset(); }} />
+            {mode === "register" && <div className="auth-hint accent">Solo se aceptan correos {UCEVA_DOMAIN}</div>}
           </div>
-
           <div className="field">
             <label>Contraseña</label>
             <div className="field-wrap">
-              <input
-                type={showPass ? "text" : "password"}
-                placeholder="••••••••"
-                value={password} onChange={e => { setPassword(e.target.value); reset(); }}
-                style={{ paddingRight: "40px" }}
-              />
-              <button className="pass-toggle" onClick={() => setShowPass(v => !v)}>
-                {showPass ? <EyeOffIcon /> : <EyeIcon />}
-              </button>
+              <input type={showPass ? "text" : "password"} placeholder="••••••••" value={password} onChange={e => { setPassword(e.target.value); reset(); }} style={{ paddingRight: "40px" }} />
+              <button className="pass-toggle" onClick={() => setShowPass(v => !v)}>{showPass ? <EyeOffIcon /> : <EyeIcon />}</button>
             </div>
-            {mode === "register" && (
-              <div className="auth-hint">Mínimo 6 caracteres</div>
-            )}
+            {mode === "register" && <div className="auth-hint">Mínimo 6 caracteres</div>}
           </div>
-
           {mode === "register" && (
             <div className="field">
               <label>Confirmar contraseña</label>
-              <input
-                type={showPass ? "text" : "password"}
-                placeholder="••••••••"
-                value={confirm} onChange={e => { setConfirm(e.target.value); reset(); }}
-                className={error && confirm !== password ? "error-input" : ""}
-              />
+              <input type={showPass ? "text" : "password"} placeholder="••••••••" value={confirm} onChange={e => { setConfirm(e.target.value); reset(); }} />
             </div>
           )}
-
-          <button className="btn-auth" onClick={mode === "login" ? handleLogin : handleRegister}>
-            {mode === "login" ? "Ingresar" : "Crear cuenta"}
+          <button className="btn-auth" disabled={loading} onClick={mode === "login" ? handleLogin : handleRegister}>
+            {loading ? "Cargando..." : mode === "login" ? "Ingresar" : "Crear cuenta"}
           </button>
         </div>
-
         <div className="auth-footer" style={{ marginTop: 20 }}>
           PhishGuard · Proyecto de Tesis · <span>UCEVA</span> · 2026
         </div>
@@ -376,9 +318,7 @@ function HomeScreen({ onStart, user, onLogout }) {
         <div className="logo-ring anim-1"><div className="logo-circle"><ShieldIcon color="#00c8ff" size={44} /></div></div>
         <div className="home-badge anim-2"><span className="badge-dot" />SISTEMA DE DETECCIÓN ACTIVO</div>
         <h1 className="home-title anim-2">PhishGuard</h1>
-        <p className="home-subtitle anim-3">
-          Detecta <span>phishing, URLs maliciosas y correos fraudulentos</span> con inteligencia artificial en tiempo real.
-        </p>
+        <p className="home-subtitle anim-3">Detecta <span>phishing, URLs maliciosas y correos fraudulentos</span> con inteligencia artificial en tiempo real.</p>
         <div className="features-row anim-4">
           <div className="feature-pill"><CheckIcon size={14} />Análisis NLP</div>
           <div className="feature-pill"><ScanIcon size={14} />Detección de URLs</div>
@@ -407,12 +347,35 @@ function AnalyzerScreen({ user, onLogout }) {
   const [placeholderIdx, setPlaceholderIdx]     = useState(0);
   const [activeTab, setActiveTab]               = useState("analizar");
   const [apiError, setApiError]                 = useState(false);
+  const [loadingHist, setLoadingHist]           = useState(false);
   const textareaRef = useRef(null);
 
   useEffect(() => {
     const t = setInterval(() => setPlaceholderIdx(i => (i + 1) % PLACEHOLDERS.length), 3500);
     return () => clearInterval(t);
   }, []);
+
+  // Cargar historial desde Supabase al abrir la pestaña
+  useEffect(() => {
+    if (activeTab === "historial") cargarHistorial();
+  }, [activeTab]);
+
+  const cargarHistorial = async () => {
+    setLoadingHist(true);
+    try {
+      const { data } = await supabase
+        .from('historial')
+        .select('*')
+        .eq('user_email', user.email)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (data) setHistorial(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingHist(false);
+    }
+  };
 
   const analizar = async () => {
     if (!input.trim() || scanning) return;
@@ -436,10 +399,17 @@ function AnalyzerScreen({ user, onLogout }) {
       setResultadoVisible(false);
       setResultado(data);
       setTimeout(() => setResultadoVisible(true), 30);
-      setHistorial(h => [
-        { id: Date.now(), texto: input.slice(0, 60) + (input.length > 60 ? "…" : ""), ...data, ts: new Date() },
-        ...h.slice(0, 9),
-      ]);
+
+      // Guardar en Supabase
+      await supabase.from('historial').insert([{
+        user_email:    user.email,
+        url_analizada: input.slice(0, 500),
+        resultado:     data.label,
+        nivel:         data.level,
+        riesgo:        data.riesgo,
+        color:         data.color,
+      }]);
+
     } catch {
       setApiError(true);
     } finally {
@@ -450,6 +420,11 @@ function AnalyzerScreen({ user, onLogout }) {
   const limpiar = () => {
     setInput(""); setResultado(null); setResultadoVisible(false); setApiError(false);
     if (textareaRef.current) textareaRef.current.focus();
+  };
+
+  const eliminarHistorial = async () => {
+    await supabase.from('historial').delete().eq('user_email', user.email);
+    setHistorial([]);
   };
 
   return (
@@ -527,6 +502,7 @@ function AnalyzerScreen({ user, onLogout }) {
         .user-bar { position:fixed; top:16px; right:20px; z-index:10; display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border); border-radius:100px; padding:6px 14px; font-size:12px; color:var(--text-muted); }
         .logout-btn { background:none; border:none; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; gap:4px; font-family:var(--font-ui); font-size:12px; transition:color .2s; }
         .logout-btn:hover { color:#ff1744; }
+        .loading-hist { text-align:center; padding:32px; color:var(--text-muted); font-family:var(--font-mono); font-size:13px; }
       `}</style>
 
       <div className="user-bar">
@@ -554,13 +530,7 @@ function AnalyzerScreen({ user, onLogout }) {
             <div className="card">
               <label className="input-label">Contenido a analizar</label>
               <div className="textarea-wrap">
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  placeholder={PLACEHOLDERS[placeholderIdx]}
-                  disabled={scanning}
-                />
+                <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)} placeholder={PLACEHOLDERS[placeholderIdx]} disabled={scanning} />
                 <span className="char-count">{input.length}</span>
               </div>
               <div className="actions">
@@ -586,8 +556,7 @@ function AnalyzerScreen({ user, onLogout }) {
                     const isActive = !isDone && progress >= step.threshold;
                     return (
                       <span key={step.label} className={`scan-step ${isDone ? "done" : ""} ${isActive ? "active" : ""}`}>
-                        <span className="step-dot" />
-                        {isDone ? `✓ ${step.label}` : step.label}
+                        <span className="step-dot" />{isDone ? `✓ ${step.label}` : step.label}
                       </span>
                     );
                   })}
@@ -600,7 +569,7 @@ function AnalyzerScreen({ user, onLogout }) {
                 <span className="api-error-icon"><WifiOffIcon size={22} /></span>
                 <div>
                   <div className="api-error-title">API no disponible</div>
-                  <div className="api-error-msg">Asegúrate de que el backend esté corriendo.</div>
+                  <div className="api-error-msg">No se pudo conectar con el servidor de IA.</div>
                   <div className="api-error-code">uvicorn api:app --reload --port 8000</div>
                 </div>
               </div>
@@ -638,8 +607,7 @@ function AnalyzerScreen({ user, onLogout }) {
                 <div className="reasons-title">Factores detectados</div>
                 {resultado.reasons.map(r => (
                   <div key={r} className="reason-item">
-                    <span className="reason-dot" style={{ background: resultado.color }} />
-                    {r}
+                    <span className="reason-dot" style={{ background: resultado.color }} />{r}
                   </div>
                 ))}
               </div>
@@ -650,19 +618,24 @@ function AnalyzerScreen({ user, onLogout }) {
         {activeTab === "historial" && (
           <div className="card">
             <div className="hist-header">
-              <span className="input-label" style={{ margin: 0 }}>Análisis recientes</span>
+              <span className="input-label" style={{ margin: 0 }}>Mis análisis guardados</span>
               {historial.length > 0 && (
-                <button className="clear-btn" onClick={() => setHistorial([])}><TrashIcon />Limpiar todo</button>
+                <button className="clear-btn" onClick={eliminarHistorial}><TrashIcon />Limpiar todo</button>
               )}
             </div>
-            {historial.length === 0 ? (
+            {loadingHist ? (
+              <div className="loading-hist">Cargando historial...</div>
+            ) : historial.length === 0 ? (
               <div className="empty-state"><ShieldIcon size={48} color="currentColor" /><p>Aún no has analizado ningún contenido</p></div>
             ) : historial.map(item => (
               <div className="hist-item" key={item.id}>
                 <span className="hist-dot" style={{ background: item.color }} />
-                <span className="hist-text">{item.texto}</span>
-                <span className="hist-badge" style={{ background: item.bg, color: item.color, border: `1px solid ${item.border}` }}>{item.label}</span>
-                <span className="hist-time"><ClockIcon />{item.ts.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}</span>
+                <span className="hist-text">{item.url_analizada}</span>
+                <span className="hist-badge" style={{ background: `${item.color}15`, color: item.color, border: `1px solid ${item.color}50` }}>{item.resultado}</span>
+                <span className="hist-time">
+                  <ClockIcon />
+                  {new Date(item.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}
+                </span>
               </div>
             ))}
           </div>
@@ -683,18 +656,18 @@ export default function App() {
   const [screen, setScreen] = useState("auth");
   const [user,   setUser]   = useState(null);
 
-  // Restaurar sesión al cargar
   useEffect(() => {
     const email = getSession();
     if (email) {
-      const users = getUsers();
-      const found = users.find(u => u.email === email);
-      if (found) { setUser(found); setScreen("home"); }
+      supabase.from('usuarios').select('*').eq('email', email).single()
+        .then(({ data }) => {
+          if (data) { setUser(data); setScreen("home"); }
+        });
     }
   }, []);
 
-  const handleLogin = (u) => { setUser(u); setScreen("home"); };
-  const handleLogout = () => { clearSession(); setUser(null); setScreen("auth"); };
+  const handleLogin  = (u) => { setUser(u); setScreen("home"); };
+  const handleLogout = ()  => { clearSession(); setUser(null); setScreen("auth"); };
 
   if (screen === "auth")     return <AuthScreen onLogin={handleLogin} />;
   if (screen === "home")     return <HomeScreen user={user} onStart={() => setScreen("analyzer")} onLogout={handleLogout} />;
