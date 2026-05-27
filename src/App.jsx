@@ -634,7 +634,7 @@ function AnalyzerScreen({ user, onLogout }) {
                 <span className="hist-badge" style={{ background: `${item.color}15`, color: item.color, border: `1px solid ${item.color}50` }}>{item.resultado}</span>
                 <span className="hist-time">
                   <ClockIcon />
-                  {new Date(item.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}
+                  {new Date(item.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", timeZone: "America/Bogota" })}
                 </span>
               </div>
             ))}
